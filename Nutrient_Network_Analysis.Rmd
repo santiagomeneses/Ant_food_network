@@ -1,0 +1,177 @@
+---
+title: "Ant Nutrient Supply Network Analysis and Visualization"
+author: "Santiago Meneses"
+date: "8/11/2022"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(igraph)
+library(RColorBrewer)
+```
+
+Here we import the data from a .csv file using the function read_csv() from the package readr (contained in tidyverse). The dataset being imported here contains variables in columns and data points in rows for each variable. This will have to be transformed
+to be used in other packages such as igraph.
+
+```{r}
+baseDir <- "~/Documents/Research/Nutritional_Specialization/Network_Analysis/"
+Raw_casta <- read_csv(paste0(baseDir, "Bella_castaneus.csv"))
+```
+
+Next we need to select and filter the variables with the IDs of interacting individuals and make a new data frame. This data frame however has two variables containing raw data tha must be summarized to add another variable, the frequency of interactions between two IDs. The result is a dataframe with only one row between interaction pair and its frequency. Then we filter out all the zero values.
+
+```{r}
+Raw_casta$Individual <- factor(Raw_casta$Individual)
+Raw_casta$With <- factor(Raw_casta$With)
+#Raw_casta$Duration <- as.Date(Raw_casta$Duration)
+#Raw_casta <- Raw_casta %>% 
+ # dplyr::mutate(sDuration = period_to_seconds(Duration))
+#as.
+sharing <- Raw_casta %>% 
+  dplyr::filter(Event == "Sharing") %>% 
+  dplyr::select(Individual, With)
+
+F_sharing <- as.data.frame(table(sharing)) # Full of zeroes.
+
+NonZero_sharing <- F_sharing %>% 
+  dplyr::filter(Freq > 0)
+```
+
+We need to create another data set with the meta data that characterizes the vertices of this network. We do this by summarizing the continuous variables and grouping by the categorical. We use group_by to then summarize individuals duration by behavior type. 
+
+```{r}
+Pre_nodes <- Raw_casta %>% 
+  dplyr::group_by(Individual, Event) %>% 
+  dplyr::count(Location)  
+
+Foraging_Nodes <- Pre_nodes %>% 
+  dplyr::group_by(Individual) %>% 
+  dplyr::filter(str_detect(Event, "Foraging") & str_detect(Location, "Outside")) %>% 
+  dplyr::select(Individual, Location) %>% 
+  dplyr::distinct(Individual, .keep_all = TRUE)
+
+Nurse_Nodes <- Pre_nodes %>% 
+  dplyr::group_by(Individual) %>% 
+  dplyr::filter(str_detect(Location, "Inside")) %>% 
+  dplyr::select(Individual, Location) %>% 
+  dplyr::distinct(Individual, .keep_all = TRUE)
+
+Nodes <- dplyr::bind_rows(Foraging_Nodes, Nurse_Nodes, .id="Role")
+Nodes <- Nodes %>% 
+  dplyr::distinct(Individual, .keep_all = TRUE) %>% 
+  dplyr::mutate(Caste = case_when(Role == 1 ~ 'Forager',
+                                  Role == 2 ~ 'Nurse')) %>% 
+  dplyr::relocate(Caste, .after = last_col()) %>% 
+  dplyr::select(Individual, Caste)
+```
+
+Next we begin to construct the network 
+```{r}
+share_net <- graph_from_data_frame(NonZero_sharing, directed = F, vertices = Nodes)
+E(share_net)$weight <- E(share_net)$Freq
+```
+Now lets explore the structure of our iGraph data. First we summarize the some characteristics like size (# of edges or relationships) and order (# number of vertices or nodes). 
+
+```{r}
+share_net
+# 1) Numner of sharing relationships
+gsize(share_net) 
+# 2) Number of nodes
+gorder(share_net) 
+# 3) Node list
+V(share_net) 
+# 4) Edge list
+E(share_net)
+# 5) Node attributes
+V(share_net)$Caste
+# 6) Adjacency matrix
+share_net[c(1:20), c(1:20)]
+```
+Then we calculate all measures of centrality for our network. 
+
+```{r}
+# 1) Degree centrality
+deg_share <- degree(share_net, mode = c("All"))
+V(share_net)$degree <- deg_share
+V(share_net)$degree
+which.max(deg_share) # Vertex with highest score
+
+# 2) Eigenvector centrality
+eig_share <- evcent(share_net)$vector
+V(share_net)$eigen <- eig_share
+V(share_net)$eigen
+which.max(eig_share)
+
+# 3) Betweeness centrality
+btw_share <- betweenness(share_net, directed = FALSE)
+V(share_net)$betweenness <- btw_share
+V(share_net)$betweenness
+which.max(btw_share)
+
+
+sharing_frame <- as_long_data_frame(share_net)
+```
+
+In this section we measure indicators of the network structure like network structure and assortativity.
+
+```{r}
+# 1) Network density (values range from 0 -1, lower the less contact)
+edge_density(share_net) #global density
+Dens_nurse <- induced_subgraph(share_net, V(share_net)[Caste=="Nurse"], impl = c("auto"))
+edge_density(Dens_nurse)
+
+# 2) Assortativity 
+values <- as.factor(V(share_net)$Caste)
+assortativity_nominal(share_net, types = values)
+
+# 2.1) Observed assortativity
+observed.assortativity <- assortativity.nominal(share_net, types = values)
+results <- vector('list', 1000)
+for(i in 1:1000){results[[i]] <- assortativity_nominal(share_net, sample(values))}
+
+# 2.2) Plot distribution of assortativity values (Observed data does not have higher assortativity scores)
+hist(unlist(results), xlim = c(0, 1.0)) +
+abline(v = observed.assortativity, col = "red", lty = 3, lwd = 2)
+```
+Network visualization. 
+```{r}
+# 1) Plotting a network with the degree centrality.
+
+set.seed(1001)
+pal <- brewer.pal(length(unique(V(share_net)$Caste)), "Set2") # vertex color assigned caste
+plot.igraph(share_net, edge.color = 'black', vertex.label.cex = 0.5,
+            vertex.color = "green", vertex.size = sqrt(deg_share)*3, 
+            edge.width = E(share_net)$weight,layout = layout_nicely)
+```
+```{r}
+# 2) Plotting network with eigenvalue centrality
+set.seed(1001)
+plot.igraph(share_net, edge.color = 'black', vertex.label.cex = 0.5,
+            vertex.color = "green", vertex.size = sqrt(eig_share)*10, 
+            edge.width = E(share_net)$weight,layout = layout_nicely)
+
+```
+```{r}
+# 3) Plotting network with betweenness centrality
+set.seed(1001)
+plot.igraph(share_net, edge.color = 'black', vertex.label.cex = 0.5,
+            vertex.color = "green", vertex.size = sqrt(btw_share)/3, 
+            edge.width = E(share_net)$weight,layout = layout_nicely)
+```
+
+
+
+
+
+
+
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
