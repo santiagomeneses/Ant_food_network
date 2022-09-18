@@ -141,9 +141,9 @@ Network visualization.
 # 1) Plotting a network with the degree centrality.
 
 set.seed(1001)
-pal <- brewer.pal(length(unique(V(share_net)$Caste)), "Set2") # vertex color assigned caste
+pal <-  rainbow(length(unique(V(share_net)$Caste))) # vertex color assigned caste
 plot.igraph(share_net, edge.color = 'black', vertex.label.cex = 0.5,
-            vertex.color = "green", vertex.size = sqrt(deg_share)*3, 
+            vertex.color = pal[as.numeric(as.factor(vertex_attr(share_net, "Caste")))], vertex.size = sqrt(deg_share)*3, 
             edge.width = E(share_net)$weight,layout = layout_nicely)
 ```
 ```{r}
