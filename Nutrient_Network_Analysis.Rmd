@@ -1,16 +1,18 @@
----
+----- meta -----
 title: "Ant Nutrient Supply Network Analysis and Visualization"
 author: "Santiago Meneses"
 date: "8/11/2022"
 output: html_notebook
----
+--- end meta ---
 
 
 ```{r}
 library(tidyverse)
-library(lubridate)
 library(igraph)
 library(RColorBrewer)
+library(graphlayouts)
+library(sna)
+library(intergraph)
 ```
 
 Here we import the data from a .csv file using the function read_csv() from the package readr (contained in tidyverse). The dataset being imported here contains variables in columns and data points in rows for each variable. This will have to be transformed
@@ -21,23 +23,22 @@ baseDir <- "~/Documents/Research/Nutritional_Specialization/Network_Analysis/"
 Raw_casta <- read_csv(paste0(baseDir, "Bella_castaneus.csv"))
 ```
 
-Next we need to select and filter the variables with the IDs of interacting individuals and make a new data frame. This data frame however has two variables containing raw data tha must be summarized to add another variable, the frequency of interactions between two IDs. The result is a dataframe with only one row between interaction pair and its frequency. Then we filter out all the zero values.
+Next we need to select and filter the variables with the IDs of interacting individuals and make a new data frame. This data frame however has two variables containing raw data that must be summarized to add another variable: the frequency of interactions between two IDs. The result is a dataframe with only one row with interaction pairs and their frequency. Then we filter out all the zero values.
 
 ```{r}
 Raw_casta$Individual <- factor(Raw_casta$Individual)
 Raw_casta$With <- factor(Raw_casta$With)
-#Raw_casta$Duration <- as.Date(Raw_casta$Duration)
-#Raw_casta <- Raw_casta %>% 
- # dplyr::mutate(sDuration = period_to_seconds(Duration))
-#as.
+
 sharing <- Raw_casta %>% 
   dplyr::filter(Event == "Sharing") %>% 
-  dplyr::select(Individual, With)
+  dplyr::select(Individual, With) %>% 
+  dplyr::count(Individual, With, name = "count", sort = TRUE)
 
-F_sharing <- as.data.frame(table(sharing)) # Full of zeroes.
+grooming <- Raw_casta %>% 
+  dplyr::filter(!is.na(With), Event == "Grooming", With != "267", With != "47") %>% 
+  dplyr::select(Individual, With) %>% 
+  dplyr::count(Individual, With, name = "count", sort = TRUE)
 
-NonZero_sharing <- F_sharing %>% 
-  dplyr::filter(Freq > 0)
 ```
 
 We need to create another data set with the meta data that characterizes the vertices of this network. We do this by summarizing the continuous variables and grouping by the categorical. We use group_by to then summarize individuals duration by behavior type. 
@@ -45,7 +46,13 @@ We need to create another data set with the meta data that characterizes the ver
 ```{r}
 Pre_nodes <- Raw_casta %>% 
   dplyr::group_by(Individual, Event) %>% 
-  dplyr::count(Location)  
+  dplyr::count(Location)
+
+groom_nodes <- grooming %>% 
+  dplyr::ungroup() %>% 
+  dplyr::distinct(Individual) %>% 
+  dplyr::filter(!is.na(Individual))
+
 
 Foraging_Nodes <- Pre_nodes %>% 
   dplyr::group_by(Individual) %>% 
@@ -68,16 +75,19 @@ Nodes <- Nodes %>%
   dplyr::select(Individual, Caste)
 ```
 
-Next we begin to construct the network 
+Next we begin to construct the networks
 ```{r}
-share_net <- graph_from_data_frame(NonZero_sharing, directed = F, vertices = Nodes)
-E(share_net)$weight <- E(share_net)$Freq
+share_net <- graph_from_data_frame(sharing, directed = FALSE, vertices = Nodes)
+E(share_net)$weight <- E(share_net)$count
+
+groom_net <- graph_from_data_frame(grooming, directed = FALSE, vertices = Nodes)
+E(groom_net)$weight <- E(groom_net)$count
 ```
 Now lets explore the structure of our iGraph data. First we summarize the some characteristics like size (# of edges or relationships) and order (# number of vertices or nodes). 
 
 ```{r}
 share_net
-# 1) Numner of sharing relationships
+# 1) Nummber of sharing relationships
 gsize(share_net) 
 # 2) Number of nodes
 gorder(share_net) 
@@ -88,7 +98,20 @@ E(share_net)
 # 5) Node attributes
 V(share_net)$Caste
 # 6) Adjacency matrix
-share_net[c(1:20), c(1:20)]
+share_net[c(1:60), c(1:60)]
+
+groom_net
+#1) Number of grooming relationships
+gsize(groom_net)
+#2) Number of Nodes
+gorder(groom_net)
+#3) Node list
+V(groom_net)
+#4) Edge list
+E(groom_net)
+#5) Node attributes
+V(groom_net)$Caste
+
 ```
 Then we calculate all measures of centrality for our network. 
 
@@ -113,12 +136,53 @@ which.max(btw_share)
 
 
 sharing_frame <- as_long_data_frame(share_net)
+
+# 1) Degree centrality
+deg_groom <- degree(groom_net, mode = c("All"))
+V(groom_net)$degree <- deg_groom
+V(groom_net)$degree
+which.max(deg_groom)
+
+grooming_frame <- as_long_data_frame(groom_net)
+
+# 2) Eigenvector centrality
+eig_groom <- evcent(groom_net)$vector
+V(groom_net)$eigen <- eig_groom
+V(groom_net)$eigen
+which.max(eig_groom)
+
+# 3) Betweeness centrality
+btw_groom <- betweenness(groom_net, directed = FALSE)
+V(groom_net)$betweenness <- btw_groom
+V(groom_net)$betweenness
+which.max(btw_groom)
+
+
+grooming_frame <- as_long_data_frame(groom_net)
+
+# density plot for betweenness centrality for both networks
+
+ggplot(grooming_frame, aes(x = from_betweenness))+
+  geom_rect(aes(xmin = 0.0 , xmax = 74.18, ymin = 0, ymax = Inf, fill = "green"), alpha = 0.9)+
+  geom_density(color="darkblue", fill="lightblue", alpha = 0.7) +
+  theme_classic() +
+  xlab(element_text("Betweenness Centrality")) +
+  ggtitle("A)")
+  
+
+ggplot(sharing_frame, aes(x = from_betweenness))+
+  geom_rect(aes(xmin = 229 , xmax = 398, ymin = 0, ymax = Inf, fill = "green"), alpha = 0.9)+
+  geom_density(color="darkblue", fill="lightblue", alpha = 0.7) +
+  theme_classic() +
+  xlab(element_text("Betweenness Centrality")) +
+  ggtitle("B)")
+
 ```
 
 In this section we measure indicators of the network structure like network structure and assortativity.
 
 ```{r}
-# 1) Network density (values range from 0 -1, lower the less contact)
+# 1) Network density (values range from 0 to 1, lower the less contact)
 edge_density(share_net) #global density
 Dens_nurse <- induced_subgraph(share_net, V(share_net)[Caste=="Nurse"], impl = c("auto"))
 edge_density(Dens_nurse)
@@ -135,22 +199,49 @@ for(i in 1:1000){results[[i]] <- assortativity_nominal(share_net, sample(values)
 # 2.2) Plot distribution of assortativity values (Observed data does not have higher assortativity scores)
 hist(unlist(results), xlim = c(0, 1.0)) +
 abline(v = observed.assortativity, col = "red", lty = 3, lwd = 2)
+
+# 1) Network density (lower the less contact)
+edge_density(groom_net)
+
+# 2) Assortativity
+values <- as.factor(V(groom_net)$Caste)
+assortativity_nominal(groom_net, types = values)
+
+# 3) Observed assortativity
+observed.assortativity <- assortativity.nominal(groom_net, types = values)
+results <- vector('list', 1000)
+for(i in 1:1000){results[[i]] <- assortativity_nominal(groom_net, sample(values))}
+
+# 3.1) plot distribution of assortativity values
+hist(unlist(results), xlim = c(0, 1.0)) +
+  abline(v = observed.assortativity, col = "red", lty = 3, lwd = 2)
+
 ```
 Network visualization. 
 ```{r}
-# 1) Plotting a network with the degree centrality.
+# 1) Plotting the sharing network with the degree centrality.
 
 set.seed(1001)
 pal <-  rainbow(length(unique(V(share_net)$Caste))) # vertex color assigned caste
 plot.igraph(share_net, edge.color = 'black', vertex.label.cex = 0.5,
             vertex.color = pal[as.numeric(as.factor(vertex_attr(share_net, "Caste")))], vertex.size = sqrt(deg_share)*3, 
             edge.width = E(share_net)$weight,layout = layout_nicely)
+
+# 1.1) Plotting the grooming network with the degree centrality.
+set.seed(1001)
+pal <-  rainbow(length(unique(V(groom_net)$Caste))) # vertex color assigned caste
+plot.igraph(groom_net, edge.color = 'black', vertex.label.cex = 0.5,
+            vertex.color = pal[as.numeric(as.factor(vertex_attr(groom_net, "Caste")))],
+            vertex.size = sqrt(deg_groom)*3,
+            edge.width = E(groom_net)$weight, layout = layout_nicely)
+
 ```
 ```{r}
 # 2) Plotting network with eigenvalue centrality
 set.seed(1001)
 plot.igraph(share_net, edge.color = 'black', vertex.label.cex = 0.5,
-            vertex.color = "green", vertex.size = sqrt(eig_share)*10, 
+            vertex.color = pal[as.numeric(as.factor(vertex_attr(share_net, "Caste")))], 
+            vertex.size = sqrt(eig_share)*10, 
             edge.width = E(share_net)$weight,layout = layout_nicely)
 
 ```
@@ -164,10 +255,164 @@ plot.igraph(share_net, edge.color = 'black', vertex.label.cex = 0.5,
 
 
 
+Now we calculate the differences in degree centrality between individuals form different roles in the colonies (Foragers v. Nurses). Degree centrality indicates the number of interactions per node, but it could also 
 
+Community Detection! 
 
+#1. Louvain Clustering.
+```{r}
+# 1) Community detection for trophallaxis network
+share_lc <- cluster_louvain(share_net)
+communities(share_lc)
 
+# 2) Community detection for grooming network.
+groom_lc <- cluster_louvain(groom_net)
+communities(groom_lc)
+```
+#2 Plotting the betweenness centrality network with the community detection.
+```{r}
+set.seed(1001) #this is to duplicate the exact same network as before.
+plot(share_lc, share_net, edge.color = 'Black', vertex.label.cex=0.5, 
+     vertex.color = "Green",
+     vertex.size = sqrt(btw_share)/3,edge.width = E(share_net)$weight, layout = layout.fruchterman.reingold)
 
+# Plotting the betweenness centrality network with the community detection.
+set.seed(1001) #this is to duplicate the exact same network as before.
+plot(groom_lc, groom_net, edge.color = 'Black', vertex.label.cex=0.5, 
+     vertex.color = "Green",
+     vertex.size = sqrt(btw_groom)/3,edge.width = E(groom_net)$weight, layout = layout.fruchterman.reingold)
+
+```
+
+Perform diffusion analyses in the obtained networks. Both asocial and social
+learning 
+
+```{r}
+# set initial innovation adoption status as 0.
+set.seed(1001)
+V(groom_net)$status=0
+l=layout_with_fr(groom_net)
+
+# plot the network
+plot(groom_net, vertex.label="", vertex.size=8, vertex.color="darkgray", layout=l)
+```
+Now we set the asocial parameter x to 0.1. This is the probability that any given 
+individual will come up with the innovation–e.g., how to forage for a new prey item.
+
+```{r}
+# set asocial parameter to 0.1
+x = 0.1
+```
+Let’s run one practice run of how this will work. In one time step, we flip a coin for each individual whether or not they will adopt the innovation. Based on the coin flip, we will convert the status of the individual to 1 if they learned the innovation in that time step:
+
+```{r}
+naive=which(V(groom_net)$status==0) #which individuals have not adopted yet?
+
+adopt=sample(c(1,0), length(naive), prob=c(x, 1-x), replace=T)
+
+V(groom_net)$status[naive][which(adopt==1)]=1
+
+plot(groom_net, vertex.label="", vertex.color=c("darkgray", "red")[V(groom_net)$status+1], vertex.size=8,layout=l)
+```
+Now, we will repeat this simulation for 30 time steps. Here, we need to consider that any given individual can only adopt an innovation once (it can’t go back). If you’re thinking about this in terms of disease, it’s like an ‘SI model’ in which individuals do not recover or go back to a susceptible state. In practical terms, this means that we will just ignore coin flips for individuals whose status = 1.
+
+```{r}
+t=30
+g.time=list()
+V(groom_net)$status=0
+for(j in 1:t){
+  naive=which(V(groom_net)$status==0) 
+  adopt=sample(c(1,0), length(naive), prob=c(x, 1-x), replace=T)
+  V(groom_net)$status[naive][which(adopt==1)]=1 
+  g.time[[j]]=groom_net
+}
+```
+What we end up with is 20 igraph objects in a list called g.time (output not shown)
+
+In these graphs, the only thing that changes across these 20 times steps is the individual status. In each time step, there will be more individuals that adopt the innovation. We can plot how many cumulative individuals adopt the new innovation (i.e., become status=1) across time steps:
+
+```{r}
+n.adopt.asocial=sapply(g.time, function(x) length(which(V(x)$status==1)))
+
+plot(n.adopt.asocial, type="b", las=1, ylab="Cumulative number of nodes adopted", xlab="Time", ylim=c(0,100))
+```
+
+You should see that, in the asocial learning case, there is a decelerating accumulation curve of individuals that adopt the innovation. This is because all individual have the same probability of adopting the new status at any given point, but they never go back–so there are fewer individuals left that hasn’t adopted the innovation as time goes on. Thus, there is a steady decelerating rate of adoption of the innovation.
+
+For visualization purposes, let’s plot the network across the first 20 time points.
+
+```{r}
+def.par <- par(no.readonly = TRUE)
+layout(matrix(1:20, byrow=T, nrow=5))
+par(mar=c(1,1,1,1))
+for(i in 1:20){
+  v.col=c("darkgray", "red")[V(g.time[[i]])$status+1]
+  plot(g.time[[i]], vertex.label="", vertex.color=v.col, layout=l, main=paste("Time",i))
+}
+```
+
+Now we use social learning transmission 
+
+```{r}
+
+V(groom_net)$status=0 # Create a vertex attribute for adoption status. 1 if the node has adopted the innovation. 0 if not.
+seed=sample(V(groom_net),2) #select 2 innovators
+V(groom_net)$status[seed]=1 #These 'seed' individuals get a status of 1 at the beginning.
+plot(groom_net, vertex.label="", vertex.size=8, vertex.color=c("darkgray", "red")[V(groom_net)$status+1], layout=l)
+
+```
+
+Now, we will set a “social transmission” parameter, s
+. You can think of this as the linear increase in the probability that an individual will take on a new “state” (e.g., learn a new foraging strategy or get infected by a disease) when it has a ‘neighbor’ that has that state. Since it’s a probabilty 0 ≤ s
+ ≤ 1.
+
+Let’s set τ=0.1 for now:
+```{r}
+tau = 0.1
+```
+Now we will simulate 30 time steps of the spread of this innovation. We will save the network for each time point. The for-loop routine will be as follows:
+
+first, we will use the neighbors() function to identify the neighbors (i.e., nodes connected to) of each node. We will use this to add up the status of each node’s neighbors.
+Next, we will implement a social learning process in which the probability p
+ that an individual that has not yet adopted the innovation will adopt in that time step = 1−e−τ∗s
+, where τ
+ is the parameter that describes the influence of social learning, and s
+ is the number of neighbors of an individual that has already adopted the innovation.
+Based on the calculated probability p
+ for each individual, we then use the sample() function to “flip a biased coin” to see if the focal individual adopts the innovation or not.We do this for every individual that has not yet adopted the innovation (i.e., status = 0). Note that if the focal individual has already adopted the innovation, then we just ignore that individual and move on.
+We then change the status of each individual that got a “1” in the coin flip to status=1
+Return to step 1.
+
+```{r}
+t=30 #time steps to run the simulation
+g2.time=list() #empty list to store the output networks
+for(j in 1:t){
+  nei.adopt=sapply(V(groom_net), function(x) sum(V(groom_net)$status[neighbors(groom_net,x)]))
+  p=(1-exp(-tau*nei.adopt))*abs(V(groom_net)$status-1) #here, we multiply the probabilities by 0 if node is already adopted, and 1 if not yet adopted
+  adopters=sapply(p, function(x) sample(c(1,0), 1, prob=c(x, 1-x)))
+  V(groom_net)$status[which(adopters==1)]=1
+  g2.time[[j]]=groom_net
+}
+```
+After this simulation has run, we will plot the accumulation curve for the number of individuals that adopted the innovation through social learning.
+
+```{r}
+n.adopt.social=sapply(g2.time, function(x) length(which(V(x)$status==1))) #for each time step, count the number of adopters.
+
+plot(n.adopt.social, type="b", las=1, ylab="Cumulative number of nodes adopted", xlab="Time", ylim=c(0,100))
+```
+
+Ok, this accumulation curve looks different than the asocial case, right? This is a clear “S-shaped” curve characteristic of social learning. Let’s plot both the asocial and social case together:
+
+```{r}
+plot(n.adopt.social, type="l", lty=1, col="black",las=1, ylab="Cumulative number of nodes adopted", xlab="Time", ylim=c(0,100))
+
+points(n.adopt.asocial, type="l", las=1, lty=2, col="red")
+
+legend("topleft", lty=c(1,2), col=c("black", "red"), legend=c("asocial", "social"))
+```
+
+Statistical Analysis:ERGM
 
 Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
 
